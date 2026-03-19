@@ -50,7 +50,17 @@
 
 ## 安装方式
 
-将技能文件夹添加到你的 agentic 环境即可。首次运行时会通过内置诊断工具引导安装依赖 (`uv`, `playwright`, `nlm`)。
+### 通过 skills.sh / OpenSkills 安装
+
+如果你的环境支持 `skills` CLI，可以直接从 GitHub 安装：
+
+```bash
+npx skills add https://github.com/biniendafeliupv187/url-to-pdf
+```
+
+### 手动安装
+
+也可以将技能文件夹添加到你的 agentic 环境中。首次运行时会通过内置诊断工具引导安装依赖 (`uv`, `playwright`, `nlm`)。
 
 ## 使用方法
 
