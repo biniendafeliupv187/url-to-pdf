@@ -67,6 +67,13 @@ python -m playwright install chromium
 - 保存 `session.json`
 - 后续默认无头运行
 - 会话过期时，再自动重新 bootstrap 一次
+- 登录完成后会自动轮询检测状态，尽量避免依赖终端里“按 Enter 继续”
+
+如果你只想先初始化登录态，也可以单独运行：
+
+```bash
+python3 scripts/bootstrap_login.py <需要登录的网站 URL>
+```
 
 ## 安装方式
 

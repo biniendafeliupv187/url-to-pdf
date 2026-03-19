@@ -475,10 +475,12 @@ class _FakePage:
         self.states = states
         self.state_index = 0
         self.pdf_paths = []
+        self.url = "https://example.com/login"
 
     def advance(self):
         if self.state_index < len(self.states) - 1:
             self.state_index += 1
+        self.url = f"https://example.com/state-{self.state_index}"
 
     def _state(self):
         return self.states[self.state_index]
@@ -526,6 +528,9 @@ class _FakeContext:
 
     async def add_cookies(self, cookies):
         return None
+
+    async def storage_state(self):
+        return {"cookies": [{"name": "sid", "value": "abc"}], "origins": []}
 
 
 class _FakeBrowser:
@@ -635,7 +640,7 @@ class TestConvertUrlToPdfLoginFlow:
         generated_pdfs = list(out_dir.rglob("*.pdf"))
         assert generated_pdfs == []
 
-    def test_non_interactive_terminal_stops_before_bootstrap_login(self, tmp_path, monkeypatch):
+    def test_non_interactive_terminal_can_still_complete_bootstrap_login(self, tmp_path, monkeypatch):
         import asyncio
 
         session_path = tmp_path / "session.json"
@@ -648,9 +653,16 @@ class TestConvertUrlToPdfLoginFlow:
         browser = _FakeBrowser(context)
 
         monkeypatch.setattr("convert_to_pdf.async_playwright", lambda: _FakeAsyncPlaywrightContext(browser))
-        monkeypatch.setattr("convert_to_pdf.has_interactive_terminal", lambda: False)
+
+        async def fake_wait_for_login_completion(page_arg, context_arg):
+            page.states.append({"title": "知识库正文", "body": "这是文章正文内容。"})
+            page.advance()
+            return {"cookies": [{"name": "sid", "value": "abc"}], "origins": []}
+
+        monkeypatch.setattr("convert_to_pdf.wait_for_login_completion", fake_wait_for_login_completion)
         monkeypatch.setattr("convert_to_pdf.hide_ui_elements_for_print", lambda page: asyncio.sleep(0))
         monkeypatch.setattr("convert_to_pdf.flatten_scroll_containers_for_print", lambda page: asyncio.sleep(0))
+        monkeypatch.setattr("convert_to_pdf.scroll_to_trigger_lazy_load", lambda page: asyncio.sleep(0))
 
         asyncio.run(
             convert_url_to_pdf(
@@ -661,4 +673,4 @@ class TestConvertUrlToPdfLoginFlow:
             )
         )
 
-        assert page.pdf_paths == []
+        assert len(page.pdf_paths) == 1

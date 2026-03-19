@@ -53,7 +53,7 @@ description: 将一个或多个网页 URL 转成高质量 PDF，并保存到 `~/
 - 如果 `uv` 为 false：提示用户安装 `uv`
 - 如果 `nlm` 为 false：提示用户安装 `notebooklm-mcp-cli`
 - 如果 `auth_valid` / `nlm_auth_valid` 为 false：只提示“NotebookLM 上传前需要 `nlm login`”
-- 如果 `interactive_terminal` 为 false：明确告知“当前运行方式无法完成网页登录 bootstrap”
+- 如果 `interactive_terminal` 为 false：提醒用户避免依赖终端输入确认；优先使用自动轮询登录完成，必要时单独运行 bootstrap 登录脚本
 
 不要把 `doctor.py` 的认证状态误解释为网页站点登录态。
 
@@ -78,7 +78,9 @@ description: 将一个或多个网页 URL 转成高质量 PDF，并保存到 `~/
 - session 过期时再次 bootstrap
 
 如果网站需要登录，优先用支持交互的方式运行脚本，让用户在弹出的浏览器里完成登录。
-如果当前环境不是交互式终端，应尽早停止并明确告诉用户需要换到交互式终端，而不是等到 `input()` 抛 `EOF`。
+优先使用自动轮询的 bootstrap 登录流程，避免依赖 `input()` 或“按 Enter 继续”。
+如果需要单独初始化登录态，可以运行：
+`python3 scripts/bootstrap_login.py <url>`
 
 ## PDF 质量策略
 这个 skill 的价值在于导出的 PDF 不只是“有文件”，而是尽量接近完整阅读页。执行时默认依赖脚本内置能力：

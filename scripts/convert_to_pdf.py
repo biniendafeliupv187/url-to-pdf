@@ -394,6 +394,50 @@ def has_interactive_terminal() -> bool:
     return bool(sys.stdin.isatty() and sys.stdout.isatty())
 
 
+async def wait_for_login_completion(
+    page,
+    context,
+    timeout_seconds: int = 300,
+    poll_interval: float = 2.0,
+) -> dict:
+    """
+    Poll a headed browser session until it appears to be authenticated.
+
+    This avoids requiring a TTY-only ``input()`` confirmation flow, which is
+    brittle in agent environments that can open a browser window but do not
+    provide interactive stdin.
+    """
+    deadline = time.monotonic() + timeout_seconds
+    last_title = ""
+    last_url = ""
+
+    while time.monotonic() < deadline:
+        try:
+            last_title = await page.title()
+        except Exception:
+            last_title = ""
+        try:
+            body_text = await page.evaluate("document.body.innerText")
+        except Exception:
+            body_text = ""
+        try:
+            last_url = page.url
+        except Exception:
+            last_url = ""
+
+        if not looks_like_login_page(last_title, body_text):
+            storage = await context.storage_state()
+            if storage.get("cookies"):
+                return storage
+
+        await asyncio.sleep(poll_interval)
+
+    raise RuntimeError(
+        "Timed out waiting for login bootstrap to complete. "
+        f"Last page title: {last_title or '<unknown>'}, URL: {last_url or '<unknown>'}"
+    )
+
+
 async def ensure_logged_in(
     url: str,
     headless_context,
@@ -401,9 +445,8 @@ async def ensure_logged_in(
     prompt_fn=None,
 ) -> None:
     """
-    Open a HEADED browser at *url*, wait for the user to log in (blocking
-    on *prompt_fn*), then copy cookies into *headless_context* and persist
-    the session to *session_path*.
+    Open a HEADED browser at *url*, wait for the user to log in, then copy
+    cookies into *headless_context* and persist the session to *session_path*.
 
     Parameters
     ----------
@@ -414,36 +457,24 @@ async def ensure_logged_in(
     session_path: str
         Where to save the Playwright storage_state JSON.
     prompt_fn: callable, optional
-        Called with a message string to block until the user is ready.
-        Defaults to ``input``. Inject a no-op in tests.
+        Optional callback used only for user-facing messaging in custom flows.
+        No stdin confirmation is required; login completion is detected by polling.
     """
-    if prompt_fn is None:
-        prompt_fn = input
-
-    if not has_interactive_terminal():
-        raise RuntimeError(
-            "Interactive login bootstrap requires a TTY. "
-            "Please rerun this command in an interactive terminal so the browser "
-            "can open and you can confirm login."
-        )
-
     print("\n" + "=" * 60)
     print("⚠️  Login required — opening browser for authentication…")
     print("=" * 60)
+    print("Please complete login in the browser window. The script will continue automatically.")
+    if prompt_fn is not None:
+        prompt_fn("Login bootstrap started in a browser window.")
 
     async with async_playwright() as p_headed:
         headed_browser = await p_headed.chromium.launch(headless=False)
         headed_context = await headed_browser.new_context()
         headed_page = await headed_context.new_page()
         await headed_page.goto(url, timeout=60_000)
-
-        prompt_fn(
-            "\n✅ Please log in in the browser window that just opened.\n"
-            "   Once you are logged in, press Enter here to continue…"
-        )
+        storage = await wait_for_login_completion(headed_page, headed_context)
 
         # Copy cookies from headed context → headless context
-        storage = await headed_context.storage_state()
         await headless_context.add_cookies(storage.get("cookies", []))
 
         # Persist for future runs
