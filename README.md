@@ -11,7 +11,7 @@
 | 功能 | 描述 |
 |------|------|
 | 🏥 **自愈式诊断** | 自动检测并修复环境问题 (uv, nlm, playwright) |
-| 🔐 **交互式会话管理** | 自动检测登录需求，无缝切换到可见浏览器让用户登录，保存会话供后续自动运行使用 |
+| 🔐 **Bootstrap 登录 + 后续无头** | 首次或会话过期时自动切到可见浏览器完成登录 bootstrap，保存会话后恢复无头批量导出 |
 | 🥷 **反爬虫规避** | 伪装 WebDriver 指纹，配置真实 User-Agent，防止 cloudflare/安全拦截 |
 | 📜 **深度完整捕获** | 智能识别自定义滚动容器 (如 Simplebar)，滚动触发所有懒加载内容，递归解除 DOM 高度限制 (flex, overflow)，确保从顶到底的完整打印 (支持 10MB+ PDF) |
 | 🧹 **纯净打印模式** | 自动注入 CSS 隐藏导航栏、侧边栏、悬浮 footer 等干扰元素，还原纯净阅读体验 |
@@ -47,6 +47,26 @@
 ### 4. 会话持久化
 - 登录后保存 `storage_state` 到 `~/.url-to-pdf/session.json`
 - 后续运行自动加载 Cookie，无需重复登录
+- 会话过期时自动重新走一次 bootstrap 登录
+
+## 首次使用建议
+
+为了让第一次使用尽量顺滑，推荐优先使用一条固定安装路径，而不是在系统 Python 上反复试错：
+
+```bash
+python3 -m venv .venv
+source .venv/bin/activate
+python -m pip install -U pip
+python -m pip install playwright
+python -m playwright install chromium
+```
+
+建议把“首次登录 bootstrap”理解成初始化步骤：
+
+- 第一次访问需要登录的网站时，打开可见浏览器完成登录
+- 保存 `session.json`
+- 后续默认无头运行
+- 会话过期时，再自动重新 bootstrap 一次
 
 ## 安装方式
 

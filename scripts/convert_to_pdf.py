@@ -389,6 +389,11 @@ async def hide_ui_elements_for_print(page) -> None:
 DEFAULT_SESSION_PATH = os.path.expanduser("~/.url-to-pdf/session.json")
 
 
+def has_interactive_terminal() -> bool:
+    """Return True when stdin/stdout are attached to a real interactive terminal."""
+    return bool(sys.stdin.isatty() and sys.stdout.isatty())
+
+
 async def ensure_logged_in(
     url: str,
     headless_context,
@@ -414,6 +419,13 @@ async def ensure_logged_in(
     """
     if prompt_fn is None:
         prompt_fn = input
+
+    if not has_interactive_terminal():
+        raise RuntimeError(
+            "Interactive login bootstrap requires a TTY. "
+            "Please rerun this command in an interactive terminal so the browser "
+            "can open and you can confirm login."
+        )
 
     print("\n" + "=" * 60)
     print("⚠️  Login required — opening browser for authentication…")
@@ -533,6 +545,10 @@ async def convert_url_to_pdf(urls, output_base_dir, wait_after_load: int = 10,
                 )
                 needs_login = needs_login or looks_like_login_page(title, body_text)
                 if needs_login:
+                    if session_exists:
+                        print("Detected missing or expired site session — starting login bootstrap…")
+                    else:
+                        print("No reusable site session found — starting first-time login bootstrap…")
                     await ensure_logged_in(url, context, session_path)
                     # Reload in headless context with new cookies
                     await page.goto(url, wait_until="domcontentloaded", timeout=60_000)

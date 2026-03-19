@@ -11,7 +11,7 @@ description: 将一个或多个网页 URL 转成高质量 PDF，并保存到 `~/
 它不只是简单调用 `page.pdf()`，还会处理这些开发中经常踩坑的场景：
 
 - 先跑环境诊断，避免缺依赖后才失败
-- 识别需要登录的网站，并在必要时切到可见浏览器让用户登录
+- 识别需要登录的网站，并在必要时切到可见浏览器完成 bootstrap 登录
 - 复用 `~/.url-to-pdf/session.json`，减少重复登录
 - 触发懒加载、展开自定义滚动容器、隐藏干扰 UI
 - 批量处理多个 URL，并自动避免文件名冲突
@@ -32,9 +32,10 @@ description: 将一个或多个网页 URL 转成高质量 PDF，并保存到 `~/
 3. 先运行诊断：
    `python3 scripts/doctor.py --json`
 4. 读取诊断结果并解释给用户：
-   - `playwright` / `playwright_package` 决定能否生成 PDF
-   - `auth_valid` 和 `nlm_auth_valid` 只表示 `nlm` / NotebookLM 上传认证状态
-   - `auth_valid: false` **不代表目标网站未登录**
+- `playwright` / `playwright_package` 决定能否生成 PDF
+- `interactive_terminal` 决定当前运行方式能否完成网页登录 bootstrap
+ - `auth_valid` 和 `nlm_auth_valid` 只表示 `nlm` / NotebookLM 上传认证状态
+  - `auth_valid: false` **不代表目标网站未登录**
 5. 调用转换脚本：
    `python3 scripts/convert_to_pdf.py <url1> <url2> ...`
 6. 生成成功后，告诉用户输出目录在 `~/Downloads/PDF/<timestamp>/`
@@ -43,13 +44,16 @@ description: 将一个或多个网页 URL 转成高质量 PDF，并保存到 `~/
 ## 环境判断
 优先以 `python3 scripts/doctor.py --json` 的结果为准。
 
-- 如果 `playwright_package` 为 false：提示用户运行
-  `pip install playwright`
-- 如果 `playwright` 为 false 但 `playwright_package` 为 true：提示用户运行
-  `playwright install chromium`
+- 如果 `playwright_package` 为 false 或 `playwright` 为 false：优先引导用户走唯一推荐安装路径：
+  `python3 -m venv .venv`
+  `source .venv/bin/activate`
+  `python -m pip install -U pip`
+  `python -m pip install playwright`
+  `python -m playwright install chromium`
 - 如果 `uv` 为 false：提示用户安装 `uv`
 - 如果 `nlm` 为 false：提示用户安装 `notebooklm-mcp-cli`
 - 如果 `auth_valid` / `nlm_auth_valid` 为 false：只提示“NotebookLM 上传前需要 `nlm login`”
+- 如果 `interactive_terminal` 为 false：明确告知“当前运行方式无法完成网页登录 bootstrap”
 
 不要把 `doctor.py` 的认证状态误解释为网页站点登录态。
 
@@ -60,13 +64,21 @@ description: 将一个或多个网页 URL 转成高质量 PDF，并保存到 `~/
 
 开发时要知道这些行为：
 
-- 无本地 session 时，会用更宽松的规则检测登录需求
+- 无本地 session 时，会触发首次 bootstrap 登录
 - 已有 session 时，会先走更严格的“session 失效”判断
 - 如果页面标题或正文强烈像登录页，也会强制进入登录流程
 - 交互登录成功后，会更新 `~/.url-to-pdf/session.json`
+- session 失效时，应自动重新 bootstrap，而不是继续导出登录页
 - 登录后如果页面仍停留在登录页，脚本会终止，不应继续保存“登录.pdf”
 
+推荐模型是：
+
+- 第一次 bootstrap 登录
+- 之后默认无头运行
+- session 过期时再次 bootstrap
+
 如果网站需要登录，优先用支持交互的方式运行脚本，让用户在弹出的浏览器里完成登录。
+如果当前环境不是交互式终端，应尽早停止并明确告诉用户需要换到交互式终端，而不是等到 `input()` 抛 `EOF`。
 
 ## PDF 质量策略
 这个 skill 的价值在于导出的 PDF 不只是“有文件”，而是尽量接近完整阅读页。执行时默认依赖脚本内置能力：

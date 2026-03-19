@@ -16,6 +16,7 @@ from convert_to_pdf import (
     safe_filename,
     resolve_collision,
     should_hide_class_token,
+    has_interactive_terminal,
     is_login_required,
     is_session_expired,
     looks_like_login_page,
@@ -248,6 +249,18 @@ class TestLooksLikeLoginPage:
     def test_avoids_false_positive_for_article_about_login(self):
         body = "本文讲解登录系统设计、密码哈希与验证码防刷策略。"
         assert looks_like_login_page("认证系统设计", body) is False
+
+
+class TestInteractiveTerminal:
+    def test_detects_interactive_terminal(self, monkeypatch):
+        monkeypatch.setattr("convert_to_pdf.sys.stdin.isatty", lambda: True)
+        monkeypatch.setattr("convert_to_pdf.sys.stdout.isatty", lambda: True)
+        assert has_interactive_terminal() is True
+
+    def test_detects_non_interactive_terminal(self, monkeypatch):
+        monkeypatch.setattr("convert_to_pdf.sys.stdin.isatty", lambda: False)
+        monkeypatch.setattr("convert_to_pdf.sys.stdout.isatty", lambda: True)
+        assert has_interactive_terminal() is False
 
 
 # --------------------------------------------------------------------------
@@ -621,3 +634,31 @@ class TestConvertUrlToPdfLoginFlow:
         out_dir = tmp_path / "out"
         generated_pdfs = list(out_dir.rglob("*.pdf"))
         assert generated_pdfs == []
+
+    def test_non_interactive_terminal_stops_before_bootstrap_login(self, tmp_path, monkeypatch):
+        import asyncio
+
+        session_path = tmp_path / "session.json"
+        session_path.write_text('{"cookies": [], "origins": []}')
+
+        page = _FakePage([
+            {"title": "登录", "body": "请输入手机号和验证码继续登录"},
+        ])
+        context = _FakeContext(page)
+        browser = _FakeBrowser(context)
+
+        monkeypatch.setattr("convert_to_pdf.async_playwright", lambda: _FakeAsyncPlaywrightContext(browser))
+        monkeypatch.setattr("convert_to_pdf.has_interactive_terminal", lambda: False)
+        monkeypatch.setattr("convert_to_pdf.hide_ui_elements_for_print", lambda page: asyncio.sleep(0))
+        monkeypatch.setattr("convert_to_pdf.flatten_scroll_containers_for_print", lambda page: asyncio.sleep(0))
+
+        asyncio.run(
+            convert_url_to_pdf(
+                ["https://example.com/private"],
+                str(tmp_path / "out"),
+                wait_after_load=0,
+                session_path=str(session_path),
+            )
+        )
+
+        assert page.pdf_paths == []
