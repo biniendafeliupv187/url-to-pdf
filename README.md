@@ -3,38 +3,8 @@
 将网页 URL 高质量转换为 PDF 文件的专业技能，支持一键上传到 Google NotebookLM。
 
 ## 工作流程
+![流程图](./workflow.png)
 
-```mermaid
-graph TD
-    A[Start] --> B(提取 URLs)
-    B --> C{依赖已安装?}
-    C -->|否| D[提示用户安装]
-    C -->|是| E[运行 convert_to_pdf.py]
-
-    subgraph Convert_to_PDF [PDF 转换引擎]
-        E1[启动浏览器 (反爬虫配置)]
-        E2[导航并检测登录态]
-        E3{需要登录?}
-
-        E1 --> E2 --> E3
-        E3 -->|是| E4[打开可见浏览器让用户登录]
-        E4 --> E5[保存会话到磁盘]
-        E5 --> E6[恢复无头模式捕获]
-        E3 -->|否| E6
-
-        E6 --> E7[深度滚动触发懒加载内容]
-        E7 --> E8[展平嵌套 DOM 容器]
-        E8 --> E9[隐藏无关 UI 侧边栏/导航]
-        E9 --> E10[导出像素级精确 PDF]
-    end
-
-    E --> Convert_to_PDF
-    Convert_to_PDF --> F{上传到 NotebookLM?}
-    F -->|是| G[选择/创建笔记本并上传]
-    F -->|否| H[保存到本地 ~/Downloads/PDF/]
-    G --> H
-    H --> I[结束]
-```
 
 ## 核心功能
 
