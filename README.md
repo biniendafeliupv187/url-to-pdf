@@ -68,12 +68,27 @@ python -m playwright install chromium
 - 后续默认无头运行
 - 会话过期时，再自动重新 bootstrap 一次
 - 登录完成后会自动轮询检测状态，尽量避免依赖终端里“按 Enter 继续”
+- 浏览器不会因为瞬时页面变化立刻关闭；脚本会等待最短驻留时间，并确认登录态（cookies）确实发生变化
 
 如果你只想先初始化登录态，也可以单独运行：
 
 ```bash
-python3 scripts/bootstrap_login.py <需要登录的网站 URL>
+python3 scripts/run.py bootstrap_login.py <需要登录的网站 URL>
 ```
+
+更推荐的使用方式是始终通过统一入口运行脚本：
+
+```bash
+python3 scripts/run.py doctor.py --json
+python3 scripts/run.py convert_to_pdf.py https://example.com
+```
+
+`run.py` 会自动：
+
+- 创建 `.venv`
+- 安装 Playwright Python 包
+- 安装 Chromium 浏览器
+- 再执行目标脚本
 
 ## 安装方式
 

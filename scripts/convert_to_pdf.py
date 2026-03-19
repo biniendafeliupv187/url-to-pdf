@@ -399,6 +399,7 @@ async def wait_for_login_completion(
     context,
     timeout_seconds: int = 300,
     poll_interval: float = 2.0,
+    min_visible_seconds: float = 8.0,
 ) -> dict:
     """
     Poll a headed browser session until it appears to be authenticated.
@@ -408,8 +409,14 @@ async def wait_for_login_completion(
     provide interactive stdin.
     """
     deadline = time.monotonic() + timeout_seconds
+    started_at = time.monotonic()
     last_title = ""
     last_url = ""
+    initial_storage = await context.storage_state()
+    initial_cookies = {
+        (cookie.get("name"), cookie.get("domain"), cookie.get("path"), cookie.get("value"))
+        for cookie in initial_storage.get("cookies", [])
+    }
 
     while time.monotonic() < deadline:
         try:
@@ -425,9 +432,14 @@ async def wait_for_login_completion(
         except Exception:
             last_url = ""
 
-        if not looks_like_login_page(last_title, body_text):
+        elapsed = time.monotonic() - started_at
+        if elapsed >= min_visible_seconds and not looks_like_login_page(last_title, body_text):
             storage = await context.storage_state()
-            if storage.get("cookies"):
+            current_cookies = {
+                (cookie.get("name"), cookie.get("domain"), cookie.get("path"), cookie.get("value"))
+                for cookie in storage.get("cookies", [])
+            }
+            if current_cookies and current_cookies != initial_cookies:
                 return storage
 
         await asyncio.sleep(poll_interval)

@@ -32,24 +32,21 @@ description: 将一个或多个网页 URL 转成高质量 PDF，并保存到 `~/
 3. 先运行诊断：
    `python3 scripts/doctor.py --json`
 4. 读取诊断结果并解释给用户：
-- `playwright` / `playwright_package` 决定能否生成 PDF
-- `interactive_terminal` 决定当前运行方式能否完成网页登录 bootstrap
- - `auth_valid` 和 `nlm_auth_valid` 只表示 `nlm` / NotebookLM 上传认证状态
-  - `auth_valid: false` **不代表目标网站未登录**
-5. 调用转换脚本：
-   `python3 scripts/convert_to_pdf.py <url1> <url2> ...`
+   - `playwright` / `playwright_package` 决定能否生成 PDF
+   - `interactive_terminal` 决定当前运行方式能否完成网页登录 bootstrap
+   - `auth_valid` 和 `nlm_auth_valid` 只表示 `nlm` / NotebookLM 上传认证状态
+   - `auth_valid: false` **不代表目标网站未登录**
+5. 优先通过统一入口调用脚本，而不是直接调用底层脚本：
+   `python3 scripts/run.py convert_to_pdf.py <url1> <url2> ...`
 6. 生成成功后，告诉用户输出目录在 `~/Downloads/PDF/<timestamp>/`
 7. 如果用户要上传 NotebookLM，再继续走上传流程
 
 ## 环境判断
 优先以 `python3 scripts/doctor.py --json` 的结果为准。
 
-- 如果 `playwright_package` 为 false 或 `playwright` 为 false：优先引导用户走唯一推荐安装路径：
-  `python3 -m venv .venv`
-  `source .venv/bin/activate`
-  `python -m pip install -U pip`
-  `python -m pip install playwright`
-  `python -m playwright install chromium`
+- 如果 `playwright_package` 为 false 或 `playwright` 为 false：优先引导用户使用
+  `python3 scripts/run.py ...`
+  让统一入口自动完成 `.venv`、Playwright 包、Chromium 浏览器的初始化
 - 如果 `uv` 为 false：提示用户安装 `uv`
 - 如果 `nlm` 为 false：提示用户安装 `notebooklm-mcp-cli`
 - 如果 `auth_valid` / `nlm_auth_valid` 为 false：只提示“NotebookLM 上传前需要 `nlm login`”
@@ -79,8 +76,9 @@ description: 将一个或多个网页 URL 转成高质量 PDF，并保存到 `~/
 
 如果网站需要登录，优先用支持交互的方式运行脚本，让用户在弹出的浏览器里完成登录。
 优先使用自动轮询的 bootstrap 登录流程，避免依赖 `input()` 或“按 Enter 继续”。
+登录轮询不应因为页面瞬时变化就立刻判定成功；应等待最短驻留时间，并确认 cookies / session 相比初始状态确实发生变化。
 如果需要单独初始化登录态，可以运行：
-`python3 scripts/bootstrap_login.py <url>`
+`python3 scripts/run.py bootstrap_login.py <url>`
 
 ## PDF 质量策略
 这个 skill 的价值在于导出的 PDF 不只是“有文件”，而是尽量接近完整阅读页。执行时默认依赖脚本内置能力：
@@ -95,6 +93,8 @@ description: 将一个或多个网页 URL 转成高质量 PDF，并保存到 `~/
 
 ## 批量处理
 可以一次传多个 URL 给 `scripts/convert_to_pdf.py`。
+更推荐的调用方式是：
+`python3 scripts/run.py convert_to_pdf.py <url1> <url2> ...`
 
 注意：
 
@@ -137,8 +137,9 @@ description: 将一个或多个网页 URL 转成高质量 PDF，并保存到 `~/
 
 ## 常用命令
 ```bash
-python3 scripts/doctor.py --json
-python3 scripts/convert_to_pdf.py <url1> <url2> ...
+python3 scripts/run.py doctor.py --json
+python3 scripts/run.py convert_to_pdf.py <url1> <url2> ...
+python3 scripts/run.py bootstrap_login.py <url>
 nlm notebook list
 python3 scripts/nlm_upload_cli.py <output_directory> <notebook_id>
 ```
@@ -146,6 +147,8 @@ python3 scripts/nlm_upload_cli.py <output_directory> <notebook_id>
 ## 相关文件
 - `scripts/doctor.py`
   环境诊断与 NotebookLM 上传认证检查
+- `scripts/run.py`
+  统一入口，自动创建 `.venv`、安装 Playwright 及浏览器，再执行目标脚本
 - `scripts/convert_to_pdf.py`
   网页转 PDF 的核心逻辑
 - `scripts/nlm_upload_cli.py`

@@ -522,6 +522,10 @@ class _FakePage:
 class _FakeContext:
     def __init__(self, page):
         self.page = page
+        self.storage_states = [
+            {"cookies": [{"name": "sid", "value": "initial"}], "origins": []}
+        ]
+        self.storage_index = 0
 
     async def new_page(self):
         return self.page
@@ -530,7 +534,10 @@ class _FakeContext:
         return None
 
     async def storage_state(self):
-        return {"cookies": [{"name": "sid", "value": "abc"}], "origins": []}
+        idx = min(self.storage_index, len(self.storage_states) - 1)
+        state = self.storage_states[idx]
+        self.storage_index += 1
+        return state
 
 
 class _FakeBrowser:
@@ -650,6 +657,10 @@ class TestConvertUrlToPdfLoginFlow:
             {"title": "登录", "body": "请输入手机号和验证码继续登录"},
         ])
         context = _FakeContext(page)
+        context.storage_states = [
+            {"cookies": [{"name": "sid", "value": "initial"}], "origins": []},
+            {"cookies": [{"name": "sid", "value": "fresh"}], "origins": []},
+        ]
         browser = _FakeBrowser(context)
 
         monkeypatch.setattr("convert_to_pdf.async_playwright", lambda: _FakeAsyncPlaywrightContext(browser))
@@ -674,3 +685,51 @@ class TestConvertUrlToPdfLoginFlow:
         )
 
         assert len(page.pdf_paths) == 1
+
+
+class TestWaitForLoginCompletion:
+    def test_requires_cookie_change_before_success(self):
+        import asyncio
+        from types import SimpleNamespace
+
+        class FakePage:
+            def __init__(self):
+                self.url = "https://example.com/auth"
+
+            async def title(self):
+                return "知识库正文"
+
+            async def evaluate(self, expr, *args):
+                if expr == "document.body.innerText":
+                    return "这是正文"
+                return None
+
+        class FakeContext:
+            def __init__(self):
+                self.states = [
+                    {"cookies": [{"name": "sid", "domain": "example.com", "path": "/", "value": "same"}], "origins": []},
+                    {"cookies": [{"name": "sid", "domain": "example.com", "path": "/", "value": "same"}], "origins": []},
+                    {"cookies": [{"name": "sid", "domain": "example.com", "path": "/", "value": "new"}], "origins": []},
+                ]
+                self.idx = 0
+
+            async def storage_state(self):
+                state = self.states[min(self.idx, len(self.states) - 1)]
+                self.idx += 1
+                return state
+
+        async def run_case():
+            from convert_to_pdf import wait_for_login_completion
+
+            page = FakePage()
+            context = FakeContext()
+            return await wait_for_login_completion(
+                page,
+                context,
+                timeout_seconds=5,
+                poll_interval=0,
+                min_visible_seconds=0,
+            )
+
+        result = asyncio.run(run_case())
+        assert result["cookies"][0]["value"] == "new"
