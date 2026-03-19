@@ -399,7 +399,8 @@ async def wait_for_login_completion(
     context,
     timeout_seconds: int = 300,
     poll_interval: float = 2.0,
-    min_visible_seconds: float = 8.0,
+    min_visible_seconds: float = 180.0,
+    stable_passes_required: int = 2,
 ) -> dict:
     """
     Poll a headed browser session until it appears to be authenticated.
@@ -412,6 +413,7 @@ async def wait_for_login_completion(
     started_at = time.monotonic()
     last_title = ""
     last_url = ""
+    stable_passes = 0
     initial_storage = await context.storage_state()
     initial_cookies = {
         (cookie.get("name"), cookie.get("domain"), cookie.get("path"), cookie.get("value"))
@@ -431,6 +433,30 @@ async def wait_for_login_completion(
             last_url = page.url
         except Exception:
             last_url = ""
+        try:
+            content_signal = await page.evaluate(
+                """() => {
+                    const selectors = [
+                        '#js_content',
+                        '.rich_media_content',
+                        'article',
+                        'main article',
+                        '[role="main"] article',
+                        '.article-content',
+                        '.post-content',
+                        '.markdown-body',
+                    ];
+                    for (const selector of selectors) {
+                        const el = document.querySelector(selector);
+                        if (el && (el.innerText || '').trim().length > 200) {
+                            return true;
+                        }
+                    }
+                    return (document.body.innerText || '').trim().length > 500;
+                }"""
+            )
+        except Exception:
+            content_signal = False
 
         elapsed = time.monotonic() - started_at
         if elapsed >= min_visible_seconds and not looks_like_login_page(last_title, body_text):
@@ -439,8 +465,13 @@ async def wait_for_login_completion(
                 (cookie.get("name"), cookie.get("domain"), cookie.get("path"), cookie.get("value"))
                 for cookie in storage.get("cookies", [])
             }
-            if current_cookies and current_cookies != initial_cookies:
-                return storage
+            cookies_changed = bool(current_cookies and current_cookies != initial_cookies)
+            if cookies_changed and content_signal:
+                stable_passes += 1
+                if stable_passes >= stable_passes_required:
+                    return storage
+            else:
+                stable_passes = 0
 
         await asyncio.sleep(poll_interval)
 

@@ -496,6 +496,8 @@ class _FakePage:
             return None
         if expr == "document.body.innerText":
             return self._state()["body"]
+        if "const selectors" in expr:
+            return len(self._state()["body"]) > 20
         if "bestDiff" in expr:
             return None
         if expr == "document.body.scrollHeight":
@@ -660,6 +662,7 @@ class TestConvertUrlToPdfLoginFlow:
         context.storage_states = [
             {"cookies": [{"name": "sid", "value": "initial"}], "origins": []},
             {"cookies": [{"name": "sid", "value": "fresh"}], "origins": []},
+            {"cookies": [{"name": "sid", "value": "fresher"}], "origins": []},
         ]
         browser = _FakeBrowser(context)
 
@@ -701,7 +704,9 @@ class TestWaitForLoginCompletion:
 
             async def evaluate(self, expr, *args):
                 if expr == "document.body.innerText":
-                    return "这是正文"
+                    return "这是一个足够长的正文内容" * 30
+                if "const selectors" in expr:
+                    return True
                 return None
 
         class FakeContext:
@@ -710,6 +715,7 @@ class TestWaitForLoginCompletion:
                     {"cookies": [{"name": "sid", "domain": "example.com", "path": "/", "value": "same"}], "origins": []},
                     {"cookies": [{"name": "sid", "domain": "example.com", "path": "/", "value": "same"}], "origins": []},
                     {"cookies": [{"name": "sid", "domain": "example.com", "path": "/", "value": "new"}], "origins": []},
+                    {"cookies": [{"name": "sid", "domain": "example.com", "path": "/", "value": "newer"}], "origins": []},
                 ]
                 self.idx = 0
 
@@ -729,7 +735,8 @@ class TestWaitForLoginCompletion:
                 timeout_seconds=5,
                 poll_interval=0,
                 min_visible_seconds=0,
+                stable_passes_required=2,
             )
 
         result = asyncio.run(run_case())
-        assert result["cookies"][0]["value"] == "new"
+        assert result["cookies"][0]["value"] == "newer"
