@@ -399,8 +399,8 @@ async def wait_for_login_completion(
     context,
     timeout_seconds: int = 300,
     poll_interval: float = 2.0,
-    min_visible_seconds: float = 180.0,
-    stable_passes_required: int = 2,
+    min_visible_seconds: float = 90.0,
+    stable_passes_required: int = 1,
 ) -> dict:
     """
     Poll a headed browser session until it appears to be authenticated.

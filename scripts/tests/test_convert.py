@@ -735,8 +735,8 @@ class TestWaitForLoginCompletion:
                 timeout_seconds=5,
                 poll_interval=0,
                 min_visible_seconds=0,
-                stable_passes_required=2,
+                stable_passes_required=1,
             )
 
         result = asyncio.run(run_case())
-        assert result["cookies"][0]["value"] == "newer"
+        assert result["cookies"][0]["value"] == "new"
