@@ -1,24 +1,30 @@
 import asyncio
 import sys
+from typing import Optional
 
 from playwright.async_api import async_playwright
 
-from convert_to_pdf import DEFAULT_SESSION_PATH, save_session, wait_for_login_completion
+from convert_to_pdf import resolve_auth_paths, save_session, wait_for_login_completion
 
 
-async def bootstrap_login(url: str, session_path: str = DEFAULT_SESSION_PATH) -> None:
+async def bootstrap_login(url: str, session_path: Optional[str] = None) -> None:
+    auth_paths = resolve_auth_paths(url, session_path)
     print(f"Starting login bootstrap for: {url}")
     print("A browser window will open. Complete login there; the script will save the session automatically.")
+    print(f"Using auth profile: {auth_paths['profile_dir']}")
 
     async with async_playwright() as p:
-        browser = await p.chromium.launch(headless=False)
-        context = await browser.new_context()
-        page = await context.new_page()
+        context = await p.chromium.launch_persistent_context(
+            user_data_dir=auth_paths["browser_profile_dir"],
+            headless=False,
+        )
+        existing_pages = getattr(context, "pages", [])
+        page = existing_pages[0] if existing_pages else await context.new_page()
         await page.goto(url, timeout=60_000)
-        storage = await wait_for_login_completion(page, context)
-        save_session(storage, session_path)
-        print(f"Session saved to {session_path}")
-        await browser.close()
+        storage = await wait_for_login_completion(page, context, url)
+        save_session(storage, auth_paths["session_path"])
+        print(f"Session saved to {auth_paths['session_path']}")
+        await context.close()
 
 
 if __name__ == "__main__":

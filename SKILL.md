@@ -12,7 +12,7 @@ description: 将一个或多个网页 URL 转成高质量 PDF，并保存到 `~/
 
 - 先跑环境诊断，避免缺依赖后才失败
 - 识别需要登录的网站，并在必要时切到可见浏览器完成 bootstrap 登录
-- 复用 `~/.url-to-pdf/session.json`，减少重复登录
+- 复用站点级 `storage_state.json` 和 `browser_profile/`，减少重复登录
 - 触发懒加载、展开自定义滚动容器、隐藏干扰 UI
 - 批量处理多个 URL，并自动避免文件名冲突
 
@@ -50,21 +50,26 @@ description: 将一个或多个网页 URL 转成高质量 PDF，并保存到 `~/
 - 如果 `uv` 为 false：提示用户安装 `uv`
 - 如果 `nlm` 为 false：提示用户安装 `notebooklm-mcp-cli`
 - 如果 `auth_valid` / `nlm_auth_valid` 为 false：只提示“NotebookLM 上传前需要 `nlm login`”
-- 如果 `interactive_terminal` 为 false：提醒用户避免依赖终端输入确认；优先使用自动轮询登录完成，必要时单独运行 bootstrap 登录脚本
+- 如果 `interactive_terminal` 为 false：优先使用 `auth_manager.py begin/confirm` 这套“用户回复已登录 + fallback 校验”的显式确认流，不要依赖终端输入
 
 不要把 `doctor.py` 的认证状态误解释为网页站点登录态。
 
 ## 登录与会话
 转换脚本会优先尝试复用：
 
-`~/.url-to-pdf/session.json`
+`~/.url-to-pdf/profiles/<site>/storage_state.json`
+
+以及对应的持久浏览器目录：
+
+`~/.url-to-pdf/profiles/<site>/browser_profile/`
 
 开发时要知道这些行为：
 
 - 无本地 session 时，会触发首次 bootstrap 登录
 - 已有 session 时，会先走更严格的“session 失效”判断
 - 如果页面标题或正文强烈像登录页，也会强制进入登录流程
-- 交互登录成功后，会更新 `~/.url-to-pdf/session.json`
+- 交互登录成功后，会更新对应站点的 `storage_state.json`
+- headed bootstrap 会复用站点级 `browser_profile/`，减少重复登录
 - session 失效时，应自动重新 bootstrap，而不是继续导出登录页
 - 登录后如果页面仍停留在登录页，脚本会终止，不应继续保存“登录.pdf”
 
@@ -79,6 +84,10 @@ description: 将一个或多个网页 URL 转成高质量 PDF，并保存到 `~/
 登录轮询不应因为页面瞬时变化就立刻判定成功；应等待最短驻留时间，并确认 cookies / session 相比初始状态确实发生变化。
 如果需要单独初始化登录态，可以运行：
 `python3 scripts/run.py bootstrap_login.py <url>`
+如果是在 Claude Code / 非交互环境里，需要用户显式确认登录，则优先运行：
+`python3 scripts/run.py auth_manager.py begin <url>`
+等用户回复“已登录”后，再运行：
+`python3 scripts/run.py auth_manager.py confirm <url>`
 
 ## PDF 质量策略
 这个 skill 的价值在于导出的 PDF 不只是“有文件”，而是尽量接近完整阅读页。执行时默认依赖脚本内置能力：

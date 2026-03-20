@@ -5,8 +5,11 @@ import re
 import sys
 import time
 from datetime import datetime
-from typing import Optional
+from typing import Optional, Tuple
+from urllib.parse import urlsplit
 from playwright.async_api import async_playwright
+
+from site_adapters import adapter_login_signal, content_selectors_for_url
 
 
 # =============================================================================
@@ -163,6 +166,19 @@ def looks_like_login_page(title: str, body_text: str) -> bool:
     return title_is_login or body_has_login_form_hints
 
 
+def looks_like_login_page_for_url(
+    url: str,
+    title: str,
+    body_text: str,
+    current_url: str = "",
+) -> bool:
+    """
+    Return True when generic login-page heuristics or site-specific hints suggest
+    the page is still an auth wall.
+    """
+    return looks_like_login_page(title, body_text) or adapter_login_signal(url, body_text, current_url)
+
+
 def load_session(path: str) -> Optional[dict]:
     """
     Load a Playwright storage_state dict from *path*.
@@ -185,6 +201,28 @@ def save_session(storage_state: dict, path: str) -> None:
     os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
     with open(path, "w", encoding="utf-8") as f:
         json.dump(storage_state, f, ensure_ascii=False, indent=2)
+
+
+async def detect_content_signal(page, url: str) -> bool:
+    """
+    Detect whether the current page appears to contain meaningful article content.
+    """
+    selectors = list(content_selectors_for_url(url))
+    try:
+        return await page.evaluate(
+            """(selectors) => {
+                for (const selector of selectors) {
+                    const el = document.querySelector(selector);
+                    if (el && (el.innerText || '').trim().length > 200) {
+                        return true;
+                    }
+                }
+                return (document.body.innerText || '').trim().length > 500;
+            }""",
+            selectors,
+        )
+    except Exception:
+        return False
 
 
 async def scroll_to_trigger_lazy_load(
@@ -387,6 +425,109 @@ async def hide_ui_elements_for_print(page) -> None:
     )
 
 DEFAULT_SESSION_PATH = os.path.expanduser("~/.url-to-pdf/session.json")
+DEFAULT_PROFILES_DIR = os.path.expanduser("~/.url-to-pdf/profiles")
+DEFAULT_STORAGE_STATE_FILENAME = "storage_state.json"
+DEFAULT_BROWSER_PROFILE_DIRNAME = "browser_profile"
+
+
+def site_key_from_url(url: str) -> str:
+    """
+    Convert a URL into a stable site key used for auth profile directories.
+    """
+    host = (urlsplit(clean_url(url)).hostname or "").lower()
+    if host.startswith("www."):
+        host = host[4:]
+    key = re.sub(r"[^a-z0-9._-]+", "-", host).strip("-")
+    return key or "default"
+
+
+def default_profile_dir_for_url(url: str) -> str:
+    """Return the default auth profile directory for a URL's host."""
+    return os.path.join(DEFAULT_PROFILES_DIR, site_key_from_url(url))
+
+
+def default_session_path_for_url(url: str) -> str:
+    """Return the default storage_state JSON path for a URL's host."""
+    return os.path.join(default_profile_dir_for_url(url), DEFAULT_STORAGE_STATE_FILENAME)
+
+
+def default_browser_profile_dir_for_url(url: str) -> str:
+    """Return the persistent headed-browser profile dir for a URL's host."""
+    return os.path.join(default_profile_dir_for_url(url), DEFAULT_BROWSER_PROFILE_DIRNAME)
+
+
+def resolve_auth_paths(url: str, session_path: Optional[str] = None) -> dict:
+    """
+    Resolve storage_state and browser profile paths for a URL.
+
+    If *session_path* is explicitly provided, it remains authoritative and the
+    browser profile directory is placed alongside it. Otherwise, a site-scoped
+    directory under ``~/.url-to-pdf/profiles/<host>/`` is used.
+    """
+    if session_path:
+        resolved_session_path = os.path.expanduser(session_path)
+        profile_dir = os.path.dirname(resolved_session_path) or "."
+    else:
+        profile_dir = default_profile_dir_for_url(url)
+        resolved_session_path = os.path.join(profile_dir, DEFAULT_STORAGE_STATE_FILENAME)
+
+    return {
+        "profile_dir": profile_dir,
+        "session_path": resolved_session_path,
+        "browser_profile_dir": os.path.join(profile_dir, DEFAULT_BROWSER_PROFILE_DIRNAME),
+    }
+
+
+def _cookie_domain_matches_host(domain: str, host: str) -> bool:
+    normalized_domain = (domain or "").lstrip(".").lower()
+    normalized_host = (host or "").lower()
+    return bool(
+        normalized_domain
+        and normalized_host
+        and (
+            normalized_host == normalized_domain
+            or normalized_host.endswith(f".{normalized_domain}")
+        )
+    )
+
+
+def session_matches_url(storage_state: Optional[dict], url: str) -> bool:
+    """
+    Return True when the storage_state contains cookies relevant to *url*'s host.
+    """
+    if not storage_state:
+        return False
+    host = (urlsplit(clean_url(url)).hostname or "").lower()
+    cookies = storage_state.get("cookies", [])
+    return any(
+        _cookie_domain_matches_host(cookie.get("domain", ""), host)
+        for cookie in cookies
+    )
+
+
+def load_session_for_url(url: str, session_path: Optional[str] = None) -> Tuple[dict, Optional[dict]]:
+    """
+    Load the best available storage_state for *url*.
+
+    Returns ``(auth_paths, saved_session)``. With default site-scoped storage, a
+    matching legacy ``~/.url-to-pdf/session.json`` file is migrated into the
+    site profile directory on first use.
+    """
+    auth_paths = resolve_auth_paths(url, session_path)
+    saved_session = load_session(auth_paths["session_path"])
+    if saved_session is not None or session_path:
+        return auth_paths, saved_session
+
+    legacy_session = load_session(DEFAULT_SESSION_PATH)
+    if session_matches_url(legacy_session, url):
+        save_session(legacy_session, auth_paths["session_path"])
+        print(
+            f"Migrated legacy session from {DEFAULT_SESSION_PATH} "
+            f"to {auth_paths['session_path']}"
+        )
+        return auth_paths, legacy_session
+
+    return auth_paths, None
 
 
 def has_interactive_terminal() -> bool:
@@ -397,6 +538,7 @@ def has_interactive_terminal() -> bool:
 async def wait_for_login_completion(
     page,
     context,
+    url: str,
     timeout_seconds: int = 300,
     poll_interval: float = 2.0,
     min_visible_seconds: float = 90.0,
@@ -433,33 +575,10 @@ async def wait_for_login_completion(
             last_url = page.url
         except Exception:
             last_url = ""
-        try:
-            content_signal = await page.evaluate(
-                """() => {
-                    const selectors = [
-                        '#js_content',
-                        '.rich_media_content',
-                        'article',
-                        'main article',
-                        '[role="main"] article',
-                        '.article-content',
-                        '.post-content',
-                        '.markdown-body',
-                    ];
-                    for (const selector of selectors) {
-                        const el = document.querySelector(selector);
-                        if (el && (el.innerText || '').trim().length > 200) {
-                            return true;
-                        }
-                    }
-                    return (document.body.innerText || '').trim().length > 500;
-                }"""
-            )
-        except Exception:
-            content_signal = False
+        content_signal = await detect_content_signal(page, url)
 
         elapsed = time.monotonic() - started_at
-        if elapsed >= min_visible_seconds and not looks_like_login_page(last_title, body_text):
+        if elapsed >= min_visible_seconds and not looks_like_login_page_for_url(url, last_title, body_text, last_url):
             storage = await context.storage_state()
             current_cookies = {
                 (cookie.get("name"), cookie.get("domain"), cookie.get("path"), cookie.get("value"))
@@ -510,25 +629,96 @@ async def ensure_logged_in(
     if prompt_fn is not None:
         prompt_fn("Login bootstrap started in a browser window.")
 
+    auth_paths = resolve_auth_paths(url, session_path)
     async with async_playwright() as p_headed:
-        headed_browser = await p_headed.chromium.launch(headless=False)
-        headed_context = await headed_browser.new_context()
-        headed_page = await headed_context.new_page()
+        headed_context = await p_headed.chromium.launch_persistent_context(
+            user_data_dir=auth_paths["browser_profile_dir"],
+            headless=False,
+        )
+        existing_pages = getattr(headed_context, "pages", [])
+        headed_page = existing_pages[0] if existing_pages else await headed_context.new_page()
         await headed_page.goto(url, timeout=60_000)
-        storage = await wait_for_login_completion(headed_page, headed_context)
+        storage = await wait_for_login_completion(headed_page, headed_context, url)
 
         # Copy cookies from headed context → headless context
         await headless_context.add_cookies(storage.get("cookies", []))
 
         # Persist for future runs
-        save_session(storage, session_path)
-        print(f"✅ Session saved to {session_path}")
+        save_session(storage, auth_paths["session_path"])
+        print(f"✅ Session saved to {auth_paths['session_path']}")
 
-        await headed_browser.close()
+        await headed_context.close()
+
+
+async def validate_saved_session_for_url(
+    url: str,
+    session_path: str,
+    wait_after_load: int = 3,
+) -> dict:
+    """
+    Validate a saved site session by opening the target URL headlessly once.
+
+    Intended as a lightweight fallback check after the user explicitly says
+    "已登录" in a non-interactive environment such as Claude Code.
+    """
+    saved_session = load_session(session_path)
+    if not saved_session:
+        return {
+            "ok": False,
+            "reason": "No saved storage_state found yet",
+            "login_page": True,
+            "content_signal": False,
+            "title": "",
+            "current_url": "",
+        }
+
+    async with async_playwright() as p:
+        browser = await p.chromium.launch(headless=True)
+        context = await browser.new_context(
+            viewport={"width": 1200, "height": 800},
+            device_scale_factor=2,
+            user_agent=(
+                "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
+                "AppleWebKit/537.36 (KHTML, like Gecko) "
+                "Chrome/121.0.0.0 Safari/537.36"
+            ),
+            storage_state=saved_session,
+        )
+        page = await context.new_page()
+        try:
+            await page.goto(url, wait_until="domcontentloaded", timeout=60_000)
+            try:
+                await page.wait_for_load_state("networkidle", timeout=30_000)
+            except Exception:
+                pass
+            if wait_after_load > 0:
+                await asyncio.sleep(wait_after_load)
+
+            title = await page.title()
+            body_text = await page.evaluate("document.body.innerText")
+            current_url = getattr(page, "url", "")
+            content_signal = await detect_content_signal(page, url)
+            login_page = looks_like_login_page_for_url(url, title, body_text, current_url)
+            expired = is_session_expired(body_text)
+            ok = bool(not login_page and not expired and content_signal)
+            return {
+                "ok": ok,
+                "reason": "" if ok else "Page still looks unauthenticated or lacks article content",
+                "login_page": login_page,
+                "content_signal": content_signal,
+                "title": title,
+                "current_url": current_url,
+            }
+        finally:
+            await page.close()
+            close_context = getattr(context, "close", None)
+            if close_context is not None:
+                await close_context()
+            await browser.close()
 
 
 async def convert_url_to_pdf(urls, output_base_dir, wait_after_load: int = 10,
-                              session_path: str = DEFAULT_SESSION_PATH):
+                              session_path: Optional[str] = None):
     """
     Convert a list of URLs to PDF files, saved under a timestamped folder.
 
@@ -541,9 +731,9 @@ async def convert_url_to_pdf(urls, output_base_dir, wait_after_load: int = 10,
     wait_after_load : int
         Extra seconds to wait after networking is idle, to let heavy JS
         frameworks (e.g. Geekbang / Next.js) finish rendering. Default: 10.
-    session_path : str
-        Path to the Playwright storage_state JSON for Cookie persistence.
-        Default: ~/.url-to-pdf/session.json.
+    session_path : str | None
+        Optional explicit path to the Playwright storage_state JSON.
+        When omitted, the tool uses ``~/.url-to-pdf/profiles/<site>/storage_state.json``.
     """
     os.makedirs(output_base_dir, exist_ok=True)
 
@@ -555,24 +745,6 @@ async def convert_url_to_pdf(urls, output_base_dir, wait_after_load: int = 10,
     async with async_playwright() as p:
         browser = await p.chromium.launch(headless=True)
 
-        # Restore saved session cookies if available
-        saved_session = load_session(session_path)
-        context_kwargs: dict = {
-            "viewport": {"width": 1200, "height": 800},
-            "device_scale_factor": 2,
-            "user_agent": (
-                "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
-                "AppleWebKit/537.36 (KHTML, like Gecko) "
-                "Chrome/121.0.0.0 Safari/537.36"
-            ),
-        }
-        if saved_session:
-            context_kwargs["storage_state"] = saved_session
-            print(f"Loaded session from {session_path}")
-
-        # High-resolution context (mirrors Puppeteer's deviceScaleFactor: 2)
-        context = await browser.new_context(**context_kwargs)
-
         for url in urls:
             url = clean_url(url)
 
@@ -580,6 +752,21 @@ async def convert_url_to_pdf(urls, output_base_dir, wait_after_load: int = 10,
                 print(f"Skipping invalid URL: {url}")
                 continue
 
+            auth_paths, saved_session = load_session_for_url(url, session_path)
+            context_kwargs: dict = {
+                "viewport": {"width": 1200, "height": 800},
+                "device_scale_factor": 2,
+                "user_agent": (
+                    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
+                    "AppleWebKit/537.36 (KHTML, like Gecko) "
+                    "Chrome/121.0.0.0 Safari/537.36"
+                ),
+            }
+            if saved_session:
+                context_kwargs["storage_state"] = saved_session
+                print(f"Loaded session from {auth_paths['session_path']}")
+
+            context = await browser.new_context(**context_kwargs)
             page = await context.new_page()
             try:
                 print(f"Navigating to: {url}")
@@ -612,18 +799,19 @@ async def convert_url_to_pdf(urls, output_base_dir, wait_after_load: int = 10,
                 # when authenticated; only definitive "未登录"/"请登录" means expired).
                 title = await page.title()
                 body_text = await page.evaluate("document.body.innerText")
-                session_exists = os.path.exists(session_path)
+                current_url = getattr(page, "url", url)
+                session_exists = bool(saved_session or os.path.exists(auth_paths["session_path"]))
                 needs_login = (
                     is_session_expired(body_text) if session_exists
                     else is_login_required(body_text)
                 )
-                needs_login = needs_login or looks_like_login_page(title, body_text)
+                needs_login = needs_login or looks_like_login_page_for_url(url, title, body_text, current_url)
                 if needs_login:
                     if session_exists:
                         print("Detected missing or expired site session — starting login bootstrap…")
                     else:
                         print("No reusable site session found — starting first-time login bootstrap…")
-                    await ensure_logged_in(url, context, session_path)
+                    await ensure_logged_in(url, context, auth_paths["session_path"])
                     # Reload in headless context with new cookies
                     await page.goto(url, wait_until="domcontentloaded", timeout=60_000)
                     try:
@@ -634,7 +822,8 @@ async def convert_url_to_pdf(urls, output_base_dir, wait_after_load: int = 10,
                         await asyncio.sleep(wait_after_load)
                     title = await page.title()
                     body_text = await page.evaluate("document.body.innerText")
-                    if looks_like_login_page(title, body_text):
+                    current_url = getattr(page, "url", url)
+                    if looks_like_login_page_for_url(url, title, body_text, current_url):
                         raise RuntimeError("Still on login page after interactive authentication")
 
                 # Derive filename from page title
@@ -663,6 +852,9 @@ async def convert_url_to_pdf(urls, output_base_dir, wait_after_load: int = 10,
                 print(f"Error converting {url}: {e}")
             finally:
                 await page.close()
+                close_context = getattr(context, "close", None)
+                if close_context is not None:
+                    await close_context()
 
         await browser.close()
 

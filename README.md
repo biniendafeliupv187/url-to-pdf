@@ -45,7 +45,7 @@
 - 支持微信等国内平台特殊 class 命名
 
 ### 4. 会话持久化
-- 登录后保存 `storage_state` 到 `~/.url-to-pdf/session.json`
+- 登录后默认按站点保存 `storage_state` 到 `~/.url-to-pdf/profiles/<site>/storage_state.json`
 - 后续运行自动加载 Cookie，无需重复登录
 - 会话过期时自动重新走一次 bootstrap 登录
 
@@ -64,16 +64,29 @@ python -m playwright install chromium
 建议把“首次登录 bootstrap”理解成初始化步骤：
 
 - 第一次访问需要登录的网站时，打开可见浏览器完成登录
-- 保存 `session.json`
+- 默认按站点保存登录态到 `~/.url-to-pdf/profiles/<site>/storage_state.json`
+- 同时维护站点级浏览器目录 `~/.url-to-pdf/profiles/<site>/browser_profile/`
 - 后续默认无头运行
 - 会话过期时，再自动重新 bootstrap 一次
-- 登录完成后会自动轮询检测状态，尽量避免依赖终端里“按 Enter 继续”
-- 浏览器不会因为瞬时页面变化立刻关闭；脚本会等待最短驻留时间，并确认登录态（cookies）确实发生变化
+- 本地交互式环境可以直接走自动 bootstrap
+- Claude Code / 非交互环境更推荐使用“用户回复已登录 + fallback 校验”的显式确认流
 
 如果你只想先初始化登录态，也可以单独运行：
 
 ```bash
 python3 scripts/run.py bootstrap_login.py <需要登录的网站 URL>
+```
+
+如果你在 Claude Code 里使用，推荐这样做：
+
+```bash
+python3 scripts/run.py auth_manager.py begin <需要登录的网站 URL>
+```
+
+浏览器里完成登录后，在对话里回复“已登录”，再执行：
+
+```bash
+python3 scripts/run.py auth_manager.py confirm <需要登录的网站 URL>
 ```
 
 更推荐的使用方式是始终通过统一入口运行脚本：

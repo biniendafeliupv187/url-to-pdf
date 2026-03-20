@@ -3,6 +3,7 @@ TDD tests for convert_to_pdf.py helper functions.
 RED phase: these tests are written BEFORE the implementation exists.
 All unit tests must pass without network access.
 """
+import json
 import os
 import sys
 import tempfile
@@ -16,6 +17,11 @@ from convert_to_pdf import (
     safe_filename,
     resolve_collision,
     should_hide_class_token,
+    site_key_from_url,
+    default_session_path_for_url,
+    default_browser_profile_dir_for_url,
+    session_matches_url,
+    load_session_for_url,
     has_interactive_terminal,
     is_login_required,
     is_session_expired,
@@ -126,6 +132,50 @@ class TestShouldHideClassToken:
     def test_avoids_false_positive_on_embedded_substrings(self):
         assert should_hide_class_token("use-femenu") is False
         assert should_hide_class_token("content-navigationless") is False
+
+
+# --------------------------------------------------------------------------
+# site-scoped auth helpers
+# --------------------------------------------------------------------------
+
+class TestSiteScopedAuthHelpers:
+    def test_site_key_uses_hostname(self):
+        assert site_key_from_url("https://time.geekbang.org/column/article/1") == "time.geekbang.org"
+
+    def test_default_session_path_is_site_scoped(self):
+        path = default_session_path_for_url("https://km.netease.com/v4/topic/1")
+        assert path.endswith("/.url-to-pdf/profiles/km.netease.com/storage_state.json")
+
+    def test_default_browser_profile_dir_is_site_scoped(self):
+        path = default_browser_profile_dir_for_url("https://mp.weixin.qq.com/s/abc")
+        assert path.endswith("/.url-to-pdf/profiles/mp.weixin.qq.com/browser_profile")
+
+    def test_session_matches_url_with_cookie_domain(self):
+        state = {
+            "cookies": [
+                {"name": "sid", "domain": ".geekbang.org", "path": "/", "value": "123"}
+            ],
+            "origins": [],
+        }
+        assert session_matches_url(state, "https://time.geekbang.org/column/article/1") is True
+
+    def test_load_session_for_url_migrates_matching_legacy_session(self, tmp_path, monkeypatch):
+        legacy_path = tmp_path / "legacy-session.json"
+        legacy_state = {
+            "cookies": [
+                {"name": "sid", "domain": ".geekbang.org", "path": "/", "value": "123"}
+            ],
+            "origins": [],
+        }
+        legacy_path.write_text(json.dumps(legacy_state), encoding="utf-8")
+        monkeypatch.setattr("convert_to_pdf.DEFAULT_SESSION_PATH", str(legacy_path))
+        monkeypatch.setattr("convert_to_pdf.DEFAULT_PROFILES_DIR", str(tmp_path / "profiles"))
+
+        auth_paths, saved_session = load_session_for_url("https://time.geekbang.org/column/article/1")
+
+        assert saved_session == legacy_state
+        assert auth_paths["session_path"].endswith("profiles/time.geekbang.org/storage_state.json")
+        assert os.path.exists(auth_paths["session_path"])
 
 
 # --------------------------------------------------------------------------
@@ -524,6 +574,7 @@ class _FakePage:
 class _FakeContext:
     def __init__(self, page):
         self.page = page
+        self.pages = [page]
         self.storage_states = [
             {"cookies": [{"name": "sid", "value": "initial"}], "origins": []}
         ]
@@ -540,6 +591,9 @@ class _FakeContext:
         state = self.storage_states[idx]
         self.storage_index += 1
         return state
+
+    async def close(self):
+        return None
 
 
 class _FakeBrowser:
@@ -561,6 +615,9 @@ class _FakePlaywright:
     async def launch(self, **kwargs):
         return self._browser
 
+    async def launch_persistent_context(self, **kwargs):
+        return self._browser.context
+
 
 class _FakeAsyncPlaywrightContext:
     def __init__(self, browser):
@@ -574,6 +631,45 @@ class _FakeAsyncPlaywrightContext:
 
 
 class TestConvertUrlToPdfLoginFlow:
+    def test_defaults_to_site_scoped_session_path(self, tmp_path, monkeypatch):
+        import asyncio
+
+        page = _FakePage([
+            {"title": "登录", "body": "请输入手机号和验证码继续登录"},
+            {"title": "知识库正文", "body": "这是文章正文内容。"},
+        ])
+        context = _FakeContext(page)
+        browser = _FakeBrowser(context)
+        login_calls = []
+
+        monkeypatch.setattr("convert_to_pdf.DEFAULT_PROFILES_DIR", str(tmp_path / "profiles"))
+        monkeypatch.setattr("convert_to_pdf.DEFAULT_SESSION_PATH", str(tmp_path / "legacy-session.json"))
+
+        async def fake_ensure_logged_in(url, headless_context, session_path_arg, prompt_fn=None):
+            login_calls.append((url, session_path_arg))
+            page.advance()
+
+        monkeypatch.setattr("convert_to_pdf.async_playwright", lambda: _FakeAsyncPlaywrightContext(browser))
+        monkeypatch.setattr("convert_to_pdf.ensure_logged_in", fake_ensure_logged_in)
+        monkeypatch.setattr("convert_to_pdf.hide_ui_elements_for_print", lambda page: asyncio.sleep(0))
+        monkeypatch.setattr("convert_to_pdf.flatten_scroll_containers_for_print", lambda page: asyncio.sleep(0))
+        monkeypatch.setattr("convert_to_pdf.scroll_to_trigger_lazy_load", lambda page: asyncio.sleep(0))
+
+        asyncio.run(
+            convert_url_to_pdf(
+                ["https://time.geekbang.org/column/article/947718"],
+                str(tmp_path / "out"),
+                wait_after_load=0,
+            )
+        )
+
+        assert login_calls == [
+            (
+                "https://time.geekbang.org/column/article/947718",
+                str(tmp_path / "profiles" / "time.geekbang.org" / "storage_state.json"),
+            )
+        ]
+
     def test_existing_session_still_triggers_login_when_title_is_login_page(self, tmp_path, monkeypatch):
         import asyncio
 
@@ -668,7 +764,7 @@ class TestConvertUrlToPdfLoginFlow:
 
         monkeypatch.setattr("convert_to_pdf.async_playwright", lambda: _FakeAsyncPlaywrightContext(browser))
 
-        async def fake_wait_for_login_completion(page_arg, context_arg):
+        async def fake_wait_for_login_completion(page_arg, context_arg, url_arg):
             page.states.append({"title": "知识库正文", "body": "这是文章正文内容。"})
             page.advance()
             return {"cookies": [{"name": "sid", "value": "abc"}], "origins": []}
@@ -705,7 +801,7 @@ class TestWaitForLoginCompletion:
             async def evaluate(self, expr, *args):
                 if expr == "document.body.innerText":
                     return "这是一个足够长的正文内容" * 30
-                if "const selectors" in expr:
+                if "selectors" in expr:
                     return True
                 return None
 
@@ -732,6 +828,7 @@ class TestWaitForLoginCompletion:
             return await wait_for_login_completion(
                 page,
                 context,
+                "https://example.com/auth",
                 timeout_seconds=5,
                 poll_interval=0,
                 min_visible_seconds=0,
