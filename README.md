@@ -86,7 +86,7 @@ python3 scripts/run.py auth_manager.py begin <需要登录的网站 URL>
 浏览器里完成登录后，在对话里回复“已登录”，再执行：
 
 ```bash
-python3 scripts/run.py auth_manager.py confirm <需要登录的网站 URL>
+python3 scripts/run.py auth_manager.py confirm
 ```
 
 更推荐的使用方式是始终通过统一入口运行脚本：

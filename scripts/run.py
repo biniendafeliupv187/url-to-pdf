@@ -83,6 +83,7 @@ def main() -> None:
         print("  python3 scripts/run.py convert_to_pdf.py https://example.com")
         print("  python3 scripts/run.py bootstrap_login.py https://example.com/login")
         print("  python3 scripts/run.py auth_manager.py begin https://example.com/login")
+        print("  python3 scripts/run.py auth_manager.py confirm")
         sys.exit(1)
 
     script_name = normalize_script_name(sys.argv[1])

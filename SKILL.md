@@ -1,176 +1,231 @@
 ---
 name: url-to-pdf
-description: 将一个或多个网页 URL 转成高质量 PDF，并保存到 `~/Downloads/PDF` 的时间戳目录。用户只要提到“导出网页为 PDF”“保存文章/文档页面”“把知识库/公众号/极客时间页面转成 PDF”“顺手上传到 NotebookLM”等场景，就应主动使用这个 skill，而不是只给脚本路径或手工步骤。
+description: 将一个或多个网页 URL 转成高质量 PDF，并保存到 `~/Downloads/PDF` 的时间戳目录。用户只要提到导出网页为 PDF、保存公众号/极客时间/知识库页面、批量转网页、登录后继续导出、回复“已登录/登录成功/登录好了/继续”来确认网页登录、或把生成的 PDF 上传到 NotebookLM，就应主动使用这个 skill，而不是只给脚本路径或手工步骤。
 ---
 
 # URL to PDF
 
-## 概述
-这个 skill 负责把真实浏览器渲染后的网页保存为 PDF，并在需要时继续上传到 NotebookLM。
+## 作用
+这个 skill 负责三件事：
 
-它不只是简单调用 `page.pdf()`，还会处理这些开发中经常踩坑的场景：
+- 把网页渲染成高质量 PDF
+- 在需要登录的网站上管理站点级登录态
+- 在用户明确要求时把生成的 PDF 上传到 NotebookLM
 
-- 先跑环境诊断，避免缺依赖后才失败
-- 识别需要登录的网站，并在必要时切到可见浏览器完成 bootstrap 登录
-- 复用站点级 `storage_state.json` 和 `browser_profile/`，减少重复登录
-- 触发懒加载、展开自定义滚动容器、隐藏干扰 UI
-- 批量处理多个 URL，并自动避免文件名冲突
+脚本入口都在 `scripts/`。写 skill 时以这些文件为准，不要以 README 作为真实行为来源。
 
-## 何时使用
-在这些场景里优先使用这个 skill：
+## 优先入口
+默认只使用这些入口：
 
-- 用户给出一个或多个网页链接，希望导出 PDF
-- 用户提到公众号、极客时间、知识库、内部站点、长文页面等“网页转 PDF”
-- 用户想把网页内容沉淀到 NotebookLM
-- 用户在调试网页导出空白页、登录页、懒加载缺失、首屏截断等问题
+- 环境诊断：`python3 scripts/doctor.py --json`
+- 统一执行入口：`python3 scripts/run.py <script> [args...]`
+- 网页转 PDF：`python3 scripts/run.py convert_to_pdf.py <url1> <url2> ...`
+- Claude Code / 非交互登录：`python3 scripts/run.py auth_manager.py begin <url>`
+- 登录确认：`python3 scripts/run.py auth_manager.py confirm`
+- 上传 PDF：`python3 scripts/nlm_upload_cli.py <output_directory> <notebook_id>`
 
-如果用户只是想“解释某个 PDF”或“总结已经上传的文件”，不要用这个 skill。
+不要默认直接运行 `auth_browser_worker.py`。那是 `auth_manager.py begin` 拉起的内部 worker。
 
-## 核心工作流
-1. 从用户请求中提取 URL。
-2. 如果 URL 被阅读模式或代理包裹，例如 `https://pure.md/https://...`，只使用原始目标 URL。
-3. 先运行诊断：
-   `python3 scripts/doctor.py --json`
-4. 读取诊断结果并解释给用户：
-   - `playwright` / `playwright_package` 决定能否生成 PDF
-   - `interactive_terminal` 决定当前运行方式能否完成网页登录 bootstrap
-   - `auth_valid` 和 `nlm_auth_valid` 只表示 `nlm` / NotebookLM 上传认证状态
-   - `auth_valid: false` **不代表目标网站未登录**
-5. 优先通过统一入口调用脚本，而不是直接调用底层脚本：
-   `python3 scripts/run.py convert_to_pdf.py <url1> <url2> ...`
-6. 生成成功后，告诉用户输出目录在 `~/Downloads/PDF/<timestamp>/`
-7. 如果用户要上传 NotebookLM，再继续走上传流程
+## 先看诊断
+先运行：
 
-## 环境判断
-优先以 `python3 scripts/doctor.py --json` 的结果为准。
+```bash
+python3 scripts/doctor.py --json
+```
 
-- 如果 `playwright_package` 为 false 或 `playwright` 为 false：优先引导用户使用
-  `python3 scripts/run.py ...`
-  让统一入口自动完成 `.venv`、Playwright 包、Chromium 浏览器的初始化
-- 如果 `uv` 为 false：提示用户安装 `uv`
-- 如果 `nlm` 为 false：提示用户安装 `notebooklm-mcp-cli`
-- 如果 `auth_valid` / `nlm_auth_valid` 为 false：只提示“NotebookLM 上传前需要 `nlm login`”
-- 如果 `interactive_terminal` 为 false：优先使用 `auth_manager.py begin/confirm` 这套“用户回复已登录 + fallback 校验”的显式确认流，不要依赖终端输入
+读取这些字段：
 
-不要把 `doctor.py` 的认证状态误解释为网页站点登录态。
-
-## 登录与会话
-转换脚本会优先尝试复用：
-
-`~/.url-to-pdf/profiles/<site>/storage_state.json`
-
-以及对应的持久浏览器目录：
-
-`~/.url-to-pdf/profiles/<site>/browser_profile/`
-
-开发时要知道这些行为：
-
-- 无本地 session 时，会触发首次 bootstrap 登录
-- 已有 session 时，会先走更严格的“session 失效”判断
-- 如果页面标题或正文强烈像登录页，也会强制进入登录流程
-- 交互登录成功后，会更新对应站点的 `storage_state.json`
-- headed bootstrap 会复用站点级 `browser_profile/`，减少重复登录
-- session 失效时，应自动重新 bootstrap，而不是继续导出登录页
-- 登录后如果页面仍停留在登录页，脚本会终止，不应继续保存“登录.pdf”
-
-推荐模型是：
-
-- 第一次 bootstrap 登录
-- 之后默认无头运行
-- session 过期时再次 bootstrap
-
-如果网站需要登录，优先用支持交互的方式运行脚本，让用户在弹出的浏览器里完成登录。
-优先使用自动轮询的 bootstrap 登录流程，避免依赖 `input()` 或“按 Enter 继续”。
-登录轮询不应因为页面瞬时变化就立刻判定成功；应等待最短驻留时间，并确认 cookies / session 相比初始状态确实发生变化。
-如果需要单独初始化登录态，可以运行：
-`python3 scripts/run.py bootstrap_login.py <url>`
-如果是在 Claude Code / 非交互环境里，需要用户显式确认登录，则优先运行：
-`python3 scripts/run.py auth_manager.py begin <url>`
-等用户回复“已登录”后，再运行：
-`python3 scripts/run.py auth_manager.py confirm <url>`
-
-## PDF 质量策略
-这个 skill 的价值在于导出的 PDF 不只是“有文件”，而是尽量接近完整阅读页。执行时默认依赖脚本内置能力：
-
-- 触发懒加载内容
-- 识别并滚动自定义滚动容器
-- 展平 `flex` / `overflow` 限制，避免只截首屏
-- 隐藏侧边栏、导航栏等干扰 UI
-- 使用更安全的 token 级 class 匹配，避免误伤正文
-
-如果开发中出现“只有首屏”“空白 PDF”“明明是正文却被隐藏”，优先检查 `scripts/convert_to_pdf.py` 里的滚动、flatten、hide-ui 逻辑，而不是先怀疑 Playwright。
-
-## 批量处理
-可以一次传多个 URL 给 `scripts/convert_to_pdf.py`。
-更推荐的调用方式是：
-`python3 scripts/run.py convert_to_pdf.py <url1> <url2> ...`
+- `playwright_package` / `playwright`
+  决定当前 Python 环境能不能执行网页转换
+- `interactive_terminal`
+  只表示当前 shell 是否适合做交互式网页登录
+- `auth_valid` / `nlm_auth_valid`
+  只表示 NotebookLM 上传认证，不表示目标网站登录态
+- `recommended_install_steps`
+  是首次安装 Playwright 的建议路径
 
 注意：
 
-- 同名标题会自动追加 `_1`、`_2` 避免覆盖
-- 如果批量任务中途被用户打断，先检查输出目录里已经落盘了哪些 PDF
-- 只补跑未完成的 URL，避免重复生成已经成功的文件
+- `auth_valid: false` 不能解释成“公众号/极客时间/知识库没登录”
+- `doctor.py` 的 `is_ready` 对 NotebookLM 上传比较严格；即使 `is_ready` 为 false，只要 `playwright` 可用，网页转 PDF 仍可能可以正常执行
+
+## 核心转换流程
+默认工作流：
+
+1. 从用户消息里提取 URL
+2. 如果 URL 是 `pure.md/...` 这类包装形式，使用原始目标 URL
+3. 跑 `python3 scripts/doctor.py --json`
+4. 用统一入口执行：
+
+```bash
+python3 scripts/run.py convert_to_pdf.py <url1> <url2> ...
+```
+
+5. 转换完成后，汇报：
+   - 输出目录 `~/Downloads/PDF/<timestamp>/`
+   - 关键 PDF 文件名
+   - 文件大小（尤其在排查空白页时）
+
+`convert_to_pdf.py` 的真实行为：
+
+- 输出目录固定在 `~/Downloads/PDF/<timestamp>/`
+- 同名标题会自动避重命名
+- 会触发懒加载、滚动自定义滚动容器、展平滚动父级、隐藏明显 UI
+- 会按 URL 复用站点级登录态
+- 无法转换单个 URL 时会打印错误，但继续处理后续 URL
+
+## 登录与会话
+当前代码不是全局单 session，而是站点级目录：
+
+- `~/.url-to-pdf/profiles/<site>/storage_state.json`
+- `~/.url-to-pdf/profiles/<site>/browser_profile/`
+
+`convert_to_pdf.py` 会优先自动复用它们。旧的 `~/.url-to-pdf/session.json` 只作为 legacy fallback。
+
+### 本地交互式终端
+如果当前环境适合直接开浏览器，`convert_to_pdf.py` 会在需要时自动 bootstrap 登录：
+
+- 无可复用 session 时
+- 页面强烈像登录页时
+- 已有 session 但正文像失效页时
+
+手动初始化也可以：
+
+```bash
+python3 scripts/run.py bootstrap_login.py <url>
+```
+
+### Claude Code / 非交互环境
+优先使用显式确认流，不要依赖终端输入：
+
+```bash
+python3 scripts/run.py auth_manager.py begin <url>
+```
+
+这会：
+
+- 为该站点创建或复用 `browser_profile/`
+- 启动后台浏览器 worker
+- 持续把最新 `storage_state.json` 刷到站点目录
+- 记录最近一次登录尝试到 `~/.url-to-pdf/last_auth_attempt.json`
+
+用户在浏览器里完成登录后，如果他们回复这些话：
+
+- `已登录`
+- `登录成功`
+- `登录好了`
+- `继续`
+- `可以了`
+
+就立刻运行：
+
+```bash
+python3 scripts/run.py auth_manager.py confirm
+```
+
+重点：
+
+- `confirm`、`status`、`cancel` 默认使用“最近一次登录尝试”
+- 这时不要要求用户重新贴 URL，除非当前会话里根本没有 begin 过
+- `confirm` 的规则是“用户确认优先 + 现有 headless 校验兜底”
+- 如果兜底校验失败，告诉用户继续保持浏览器打开，完成登录后再 `confirm`
+
+可用子命令：
+
+```bash
+python3 scripts/run.py auth_manager.py begin <url>
+python3 scripts/run.py auth_manager.py confirm
+python3 scripts/run.py auth_manager.py status
+python3 scripts/run.py auth_manager.py cancel
+```
+
+## 站点适配
+当前 `site_adapters.py` 已内置这些站点：
+
+- `mp.weixin.qq.com`
+- `time.geekbang.org`
+- `km.netease.com`
+
+这些适配器目前主要提供：
+
+- 正文选择器
+- URL / 正文级登录信号
+
+其它站点会落到 generic fallback。
+
+所以在这些站点上，优先相信现有适配器逻辑；在未知站点上，保守解释结果，必要时让用户确认导出效果。
+
+## PDF 质量判断
+导出成功不等于内容正确。至少检查这些信号：
+
+- 文件是否存在
+- 文件大小是否明显大于空白壳 PDF
+- 文件名是否像正文标题，而不是“登录”
+
+如果用户是在排查质量问题，优先从这些方向解释：
+
+- 懒加载内容没触发
+- 自定义滚动容器没完全展开
+- 登录页被导成了 PDF
+- UI 隐藏规则误伤正文
 
 ## NotebookLM 上传
-只有在用户明确表示要上传时才继续。
+只有在用户明确说要上传时才继续。
 
 标准流程：
 
-1. 询问用户：`Do you want to upload these PDFs to NotebookLM? (Y/N)`
-2. 如果用户选择 `Y`，先运行：
-   `nlm notebook list`
-3. 让用户选择 notebook ID，或输入 `N` 创建新 notebook
-4. 上传：
-   `python3 scripts/nlm_upload_cli.py <output_directory> <notebook_id>`
+1. 先列 notebooks：
 
-补充开发约定：
-
-- 如果用户说 `N` 且提供了新名称，可以直接用 `nlm notebook create <title>` 先创建，再把 ID 传给上传脚本
-- 如果 `nlm notebook list` 或上传报认证错误，提示用户先执行：
-  `nlm login`
-
-## 输出要求
-完成一次转换后，至少告诉用户：
-
-- 是否成功生成
-- 输出目录
-- 关键 PDF 文件名
-- 如果你做了核查，可顺手报告文件大小，帮助判断是否是空白页
-
-如果生成失败，也要明确说明失败阶段：
-
-- 依赖未安装
-- 需要网页登录
-- 登录后仍停在登录页
-- 上传失败但本地 PDF 已成功生成
-
-## 常用命令
 ```bash
-python3 scripts/run.py doctor.py --json
-python3 scripts/run.py convert_to_pdf.py <url1> <url2> ...
-python3 scripts/run.py bootstrap_login.py <url>
 nlm notebook list
+```
+
+2. 让用户给 notebook ID；如果用户要新建：
+   - 如果只需要默认名称，可以让 `nlm_upload_cli.py` 走 `CREATE_NEW`
+   - 如果用户指定自定义名称，先自己运行 `nlm notebook create <title>`，拿到 ID 再上传
+
+3. 上传：
+
+```bash
 python3 scripts/nlm_upload_cli.py <output_directory> <notebook_id>
 ```
 
+上传脚本的真实行为：
+
+- 只会上传目录里的 `*.pdf`
+- 找不到 `nlm` 时会直接报错
+- 遇到认证失败会提示先 `nlm login`
+
+## 输出要求
+结束时至少告诉用户：
+
+- 是否成功生成 PDF
+- 输出目录
+- 关键文件名
+- 文件大小
+
+如果失败，明确说是哪个阶段失败：
+
+- 依赖未就绪
+- 网站需要登录
+- `confirm` 兜底校验未通过
+- 登录后仍停在登录页
+- 本地 PDF 成功但 NotebookLM 上传失败
+
 ## 相关文件
 - `scripts/doctor.py`
-  环境诊断与 NotebookLM 上传认证检查
+  环境诊断和 NotebookLM 上传认证检查
 - `scripts/run.py`
-  统一入口，自动创建 `.venv`、安装 Playwright 及浏览器，再执行目标脚本
+  统一入口，自动建 `.venv` 并安装 Playwright / Chromium
 - `scripts/convert_to_pdf.py`
-  网页转 PDF 的核心逻辑
+  转换、会话复用、自动 bootstrap、登录页校验
+- `scripts/auth_manager.py`
+  Claude Code 友好的 begin / confirm / status / cancel
+- `scripts/auth_browser_worker.py`
+  后台有头浏览器 worker
+- `scripts/site_adapters.py`
+  站点适配和 generic fallback
+- `scripts/bootstrap_login.py`
+  纯交互式手动 bootstrap
 - `scripts/nlm_upload_cli.py`
-  将生成目录里的 PDF 上传到 NotebookLM
-- `README.md`
-  更完整的设计背景和实现亮点
-
-## 示例
-用户：
-`@/url-to-pdf https://mp.weixin.qq.com/s/... https://time.geekbang.org/column/article/...`
-
-期望行为：
-- 先诊断环境
-- 批量导出 PDF 到 `~/Downloads/PDF/<timestamp>/`
-- 若站点要求登录，则明确引导用户完成网页登录
-- 完成后汇报输出目录，并询问是否上传到 NotebookLM
+  NotebookLM 上传
