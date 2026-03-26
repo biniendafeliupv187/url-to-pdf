@@ -1,0 +1,82 @@
+[
+  {
+    "query": "帮我把这个公众号文章存成 PDF，后面我要传到 NotebookLM：https://mp.weixin.qq.com/s/abc123xyz987",
+    "should_trigger": true
+  },
+  {
+    "query": "我这边有 6 个内部知识库链接要批量导出成 pdf，最后告诉我都生成到了哪个目录：https://km.netease.com/doc/alpha https://km.netease.com/doc/beta https://km.netease.com/doc/gamma",
+    "should_trigger": true
+  },
+  {
+    "query": "极客时间这篇专栏我已经买了，但是网页得先登录。你直接拉起页面，我登完以后会回你“已登录”：https://time.geekbang.org/column/article/123456",
+    "should_trigger": true
+  },
+  {
+    "query": "继续，刚才那个需要登录的页面我已经登录成功了，你往下执行就行",
+    "should_trigger": true
+  },
+  {
+    "query": "把这个 pure.md 包装过的链接导出一下，别存成 markdown，要按真实网页渲染导出 pdf：https://pure.md/http://mp.weixin.qq.com/s/example",
+    "should_trigger": true
+  },
+  {
+    "query": "我第一次在这台机器上用，想把公司知识库那篇文章另存成 PDF。如果它跳登录页，你就按现在的登录流程继续处理这个链接：https://km.netease.com/doc/first-login-case",
+    "should_trigger": true
+  },
+  {
+    "query": "刚生成的那批网页 PDF，帮我上传到 NotebookLM 里我刚建好的 notebook，ID 是 nb-7f3a2d1c",
+    "should_trigger": true
+  },
+  {
+    "query": "我想把一组文章离线保存，最好按浏览器实际渲染结果导出，不是 curl 抓源码。链接在这：https://mp.weixin.qq.com/s/a1 https://time.geekbang.org/column/article/222",
+    "should_trigger": true
+  },
+  {
+    "query": "这个内网页面需要登录才能看全文，你帮我走网页转 PDF 的流程，登录完我会回复“继续”：https://km.netease.com/doc/login-needed",
+    "should_trigger": true
+  },
+  {
+    "query": "把刚才导出来的 PDF 继续传到 NotebookLM，如果你需要 notebook id 就用这个：https://notebooklm.google.com/notebook/abcd1234",
+    "should_trigger": true
+  },
+  {
+    "query": "帮我看一下这个链接讲了什么，整理成 5 条中文摘要就行，不用导出 PDF：https://mp.weixin.qq.com/s/abc123xyz987",
+    "should_trigger": false
+  },
+  {
+    "query": "这个网页我不要 PDF，只想把正文抓成 markdown 文件，里面的图片链接也保留下来：https://km.netease.com/doc/export-markdown",
+    "should_trigger": false
+  },
+  {
+    "query": "我已经有一堆本地 PDF 了，在 ~/Downloads/research/，你帮我批量上传到 NotebookLM，不涉及网页链接",
+    "should_trigger": false
+  },
+  {
+    "query": "看下 scripts/convert_to_pdf.py 为什么在 Playwright 登录后还会卡住，帮我分析 bug 和补测试",
+    "should_trigger": false
+  },
+  {
+    "query": "把这个网页截一张长图发我，不需要 PDF：https://time.geekbang.org/column/article/123456",
+    "should_trigger": false
+  },
+  {
+    "query": "我在终端里输入了“登录成功”还是没反应，帮我 review 一下这个 skill 和 scripts，到底哪里有问题",
+    "should_trigger": false
+  },
+  {
+    "query": "访问这个 URL 帮我检查 302 跳转链路和响应头，想知道是不是被网关拦了：https://km.netease.com/doc/network-check",
+    "should_trigger": false
+  },
+  {
+    "query": "能不能用 requests 把这个网页源码抓下来，然后提取出 title 和正文文本：https://mp.weixin.qq.com/s/source-only",
+    "should_trigger": false
+  },
+  {
+    "query": "我想把一个本地 html 文件转成 pdf，文件在 ~/Desktop/demo.html，不涉及浏览器登录或在线 URL",
+    "should_trigger": false
+  },
+  {
+    "query": "把这个极客时间链接里的代码块都抽出来生成一个 markdown gist，不需要导出整个页面：https://time.geekbang.org/column/article/654321",
+    "should_trigger": false
+  }
+]

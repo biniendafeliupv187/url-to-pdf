@@ -179,6 +179,48 @@ class TestSiteScopedAuthHelpers:
 
 
 # --------------------------------------------------------------------------
+# login strategy selection — decouple TTY, browser capability, confirmation mode
+# --------------------------------------------------------------------------
+
+class TestResolveLoginStrategy:
+    def test_interactive_environment_uses_auto_bootstrap_polling(self):
+        import convert_to_pdf
+
+        strategy = convert_to_pdf.resolve_login_strategy(
+            interactive_terminal=True,
+            headed_browser_available=True,
+        )
+
+        assert strategy.name == "auto_bootstrap"
+        assert strategy.requires_headed_browser is True
+        assert strategy.confirmation_mode == "browser_polling"
+
+    def test_non_interactive_environment_uses_explicit_confirm(self):
+        import convert_to_pdf
+
+        strategy = convert_to_pdf.resolve_login_strategy(
+            interactive_terminal=False,
+            headed_browser_available=True,
+        )
+
+        assert strategy.name == "explicit_confirm"
+        assert strategy.requires_headed_browser is True
+        assert strategy.confirmation_mode == "explicit_user_confirm"
+
+    def test_missing_headed_browser_support_is_unsupported(self):
+        import convert_to_pdf
+
+        strategy = convert_to_pdf.resolve_login_strategy(
+            interactive_terminal=True,
+            headed_browser_available=False,
+        )
+
+        assert strategy.name == "unsupported"
+        assert strategy.requires_headed_browser is False
+        assert strategy.confirmation_mode == "unavailable"
+
+
+# --------------------------------------------------------------------------
 # is_login_required() — detect login wall from page body text
 # --------------------------------------------------------------------------
 
@@ -651,6 +693,7 @@ class TestConvertUrlToPdfLoginFlow:
 
         monkeypatch.setattr("convert_to_pdf.async_playwright", lambda: _FakeAsyncPlaywrightContext(browser))
         monkeypatch.setattr("convert_to_pdf.ensure_logged_in", fake_ensure_logged_in)
+        monkeypatch.setattr("convert_to_pdf.has_interactive_terminal", lambda: True)
         monkeypatch.setattr("convert_to_pdf.hide_ui_elements_for_print", lambda page: asyncio.sleep(0))
         monkeypatch.setattr("convert_to_pdf.flatten_scroll_containers_for_print", lambda page: asyncio.sleep(0))
         monkeypatch.setattr("convert_to_pdf.scroll_to_trigger_lazy_load", lambda page: asyncio.sleep(0))
@@ -690,6 +733,7 @@ class TestConvertUrlToPdfLoginFlow:
 
         monkeypatch.setattr("convert_to_pdf.async_playwright", lambda: _FakeAsyncPlaywrightContext(browser))
         monkeypatch.setattr("convert_to_pdf.ensure_logged_in", fake_ensure_logged_in)
+        monkeypatch.setattr("convert_to_pdf.has_interactive_terminal", lambda: True)
         monkeypatch.setattr("convert_to_pdf.hide_ui_elements_for_print", lambda page: asyncio.sleep(0))
         monkeypatch.setattr("convert_to_pdf.flatten_scroll_containers_for_print", lambda page: asyncio.sleep(0))
 
@@ -703,6 +747,45 @@ class TestConvertUrlToPdfLoginFlow:
         )
 
         assert len(login_calls) == 1
+        assert len(page.pdf_paths) == 1
+        assert os.path.exists(page.pdf_paths[0])
+        assert os.path.basename(page.pdf_paths[0]) == "知识库正文.pdf"
+
+    def test_existing_valid_session_in_non_interactive_env_skips_login_flow(self, tmp_path, monkeypatch, capsys):
+        import asyncio
+
+        session_path = tmp_path / "session.json"
+        session_path.write_text('{"cookies": [{"name": "sid", "value": "saved"}], "origins": []}')
+
+        page = _FakePage([
+            {"title": "知识库正文", "body": "这是文章正文内容，长度足够长，可以视为正常正文页面。"},
+        ])
+        context = _FakeContext(page)
+        browser = _FakeBrowser(context)
+        login_calls = []
+
+        async def fake_ensure_logged_in(url, headless_context, session_path_arg, prompt_fn=None):
+            login_calls.append((url, session_path_arg))
+
+        monkeypatch.setattr("convert_to_pdf.async_playwright", lambda: _FakeAsyncPlaywrightContext(browser))
+        monkeypatch.setattr("convert_to_pdf.ensure_logged_in", fake_ensure_logged_in)
+        monkeypatch.setattr("convert_to_pdf.has_interactive_terminal", lambda: False)
+        monkeypatch.setattr("convert_to_pdf.hide_ui_elements_for_print", lambda page: asyncio.sleep(0))
+        monkeypatch.setattr("convert_to_pdf.flatten_scroll_containers_for_print", lambda page: asyncio.sleep(0))
+        monkeypatch.setattr("convert_to_pdf.scroll_to_trigger_lazy_load", lambda page: asyncio.sleep(0))
+
+        asyncio.run(
+            convert_url_to_pdf(
+                ["https://example.com/private"],
+                str(tmp_path / "out"),
+                wait_after_load=0,
+                session_path=str(session_path),
+            )
+        )
+
+        captured = capsys.readouterr().out
+        assert login_calls == []
+        assert "auth_manager.py begin" not in captured
         assert len(page.pdf_paths) == 1
         assert os.path.exists(page.pdf_paths[0])
         assert os.path.basename(page.pdf_paths[0]) == "知识库正文.pdf"
@@ -727,6 +810,7 @@ class TestConvertUrlToPdfLoginFlow:
 
         monkeypatch.setattr("convert_to_pdf.async_playwright", lambda: _FakeAsyncPlaywrightContext(browser))
         monkeypatch.setattr("convert_to_pdf.ensure_logged_in", fake_ensure_logged_in)
+        monkeypatch.setattr("convert_to_pdf.has_interactive_terminal", lambda: True)
         monkeypatch.setattr("convert_to_pdf.hide_ui_elements_for_print", lambda page: asyncio.sleep(0))
         monkeypatch.setattr("convert_to_pdf.flatten_scroll_containers_for_print", lambda page: asyncio.sleep(0))
 
@@ -745,7 +829,7 @@ class TestConvertUrlToPdfLoginFlow:
         generated_pdfs = list(out_dir.rglob("*.pdf"))
         assert generated_pdfs == []
 
-    def test_non_interactive_terminal_can_still_complete_bootstrap_login(self, tmp_path, monkeypatch):
+    def test_existing_session_in_non_interactive_env_requires_explicit_auth_flow(self, tmp_path, monkeypatch, capsys):
         import asyncio
 
         session_path = tmp_path / "session.json"
@@ -755,21 +839,16 @@ class TestConvertUrlToPdfLoginFlow:
             {"title": "登录", "body": "请输入手机号和验证码继续登录"},
         ])
         context = _FakeContext(page)
-        context.storage_states = [
-            {"cookies": [{"name": "sid", "value": "initial"}], "origins": []},
-            {"cookies": [{"name": "sid", "value": "fresh"}], "origins": []},
-            {"cookies": [{"name": "sid", "value": "fresher"}], "origins": []},
-        ]
         browser = _FakeBrowser(context)
+        login_calls = []
 
         monkeypatch.setattr("convert_to_pdf.async_playwright", lambda: _FakeAsyncPlaywrightContext(browser))
 
-        async def fake_wait_for_login_completion(page_arg, context_arg, url_arg):
-            page.states.append({"title": "知识库正文", "body": "这是文章正文内容。"})
-            page.advance()
-            return {"cookies": [{"name": "sid", "value": "abc"}], "origins": []}
+        async def fake_ensure_logged_in(url, headless_context, session_path_arg, prompt_fn=None):
+            login_calls.append((url, session_path_arg))
 
-        monkeypatch.setattr("convert_to_pdf.wait_for_login_completion", fake_wait_for_login_completion)
+        monkeypatch.setattr("convert_to_pdf.ensure_logged_in", fake_ensure_logged_in)
+        monkeypatch.setattr("convert_to_pdf.has_interactive_terminal", lambda: False)
         monkeypatch.setattr("convert_to_pdf.hide_ui_elements_for_print", lambda page: asyncio.sleep(0))
         monkeypatch.setattr("convert_to_pdf.flatten_scroll_containers_for_print", lambda page: asyncio.sleep(0))
         monkeypatch.setattr("convert_to_pdf.scroll_to_trigger_lazy_load", lambda page: asyncio.sleep(0))
@@ -783,7 +862,47 @@ class TestConvertUrlToPdfLoginFlow:
             )
         )
 
-        assert len(page.pdf_paths) == 1
+        captured = capsys.readouterr().out
+        assert login_calls == []
+        assert "auth_manager.py begin https://example.com/private" in captured
+        assert "auth_manager.py confirm" in captured
+        generated_pdfs = list((tmp_path / "out").rglob("*.pdf"))
+        assert generated_pdfs == []
+
+    def test_first_time_login_in_non_interactive_env_requires_explicit_auth_flow(self, tmp_path, monkeypatch, capsys):
+        import asyncio
+
+        page = _FakePage([
+            {"title": "登录", "body": "请输入手机号和验证码继续登录"},
+        ])
+        context = _FakeContext(page)
+        browser = _FakeBrowser(context)
+        login_calls = []
+
+        async def fake_ensure_logged_in(url, headless_context, session_path_arg, prompt_fn=None):
+            login_calls.append((url, session_path_arg))
+
+        monkeypatch.setattr("convert_to_pdf.async_playwright", lambda: _FakeAsyncPlaywrightContext(browser))
+        monkeypatch.setattr("convert_to_pdf.ensure_logged_in", fake_ensure_logged_in)
+        monkeypatch.setattr("convert_to_pdf.has_interactive_terminal", lambda: False)
+        monkeypatch.setattr("convert_to_pdf.hide_ui_elements_for_print", lambda page: asyncio.sleep(0))
+        monkeypatch.setattr("convert_to_pdf.flatten_scroll_containers_for_print", lambda page: asyncio.sleep(0))
+        monkeypatch.setattr("convert_to_pdf.scroll_to_trigger_lazy_load", lambda page: asyncio.sleep(0))
+
+        asyncio.run(
+            convert_url_to_pdf(
+                ["https://example.com/private"],
+                str(tmp_path / "out"),
+                wait_after_load=0,
+            )
+        )
+
+        captured = capsys.readouterr().out
+        assert login_calls == []
+        assert "auth_manager.py begin https://example.com/private" in captured
+        assert "auth_manager.py confirm" in captured
+        generated_pdfs = list((tmp_path / "out").rglob("*.pdf"))
+        assert generated_pdfs == []
 
 
 class TestWaitForLoginCompletion:

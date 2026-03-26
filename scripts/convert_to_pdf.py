@@ -4,6 +4,7 @@ import os
 import re
 import sys
 import time
+from dataclasses import dataclass
 from datetime import datetime
 from typing import Optional, Tuple
 from urllib.parse import urlsplit
@@ -535,6 +536,64 @@ def has_interactive_terminal() -> bool:
     return bool(sys.stdin.isatty() and sys.stdout.isatty())
 
 
+@dataclass(frozen=True)
+class LoginStrategy:
+    name: str
+    requires_headed_browser: bool
+    confirmation_mode: str
+
+
+def resolve_login_strategy(
+    *,
+    interactive_terminal: bool,
+    headed_browser_available: bool,
+) -> LoginStrategy:
+    """
+    Resolve login handling policy from environment capabilities.
+
+    This keeps TTY detection, headed-browser availability, and login completion
+    mode as separate concepts instead of encoding them directly in the main
+    conversion flow.
+    """
+    if not headed_browser_available:
+        return LoginStrategy(
+            name="unsupported",
+            requires_headed_browser=False,
+            confirmation_mode="unavailable",
+        )
+
+    if interactive_terminal:
+        return LoginStrategy(
+            name="auto_bootstrap",
+            requires_headed_browser=True,
+            confirmation_mode="browser_polling",
+        )
+
+    return LoginStrategy(
+        name="explicit_confirm",
+        requires_headed_browser=True,
+        confirmation_mode="explicit_user_confirm",
+    )
+
+
+def unsupported_login_flow_message(url: str) -> str:
+    """Return guidance when the environment cannot launch a headed browser."""
+    return (
+        "Login required, but this environment cannot launch a headed browser for authentication.\n"
+        f"Finish login in a desktop environment first, then retry: {url}"
+    )
+
+
+def explicit_auth_flow_message(url: str) -> str:
+    """Return operator guidance for login-required pages in non-interactive environments."""
+    return (
+        "Login required in a non-interactive environment must use the explicit auth flow.\n"
+        f"Run: python3 scripts/run.py auth_manager.py begin {url}\n"
+        "After login in the browser, reply '已登录' and run:\n"
+        "  python3 scripts/run.py auth_manager.py confirm"
+    )
+
+
 async def wait_for_login_completion(
     page,
     context,
@@ -807,6 +866,14 @@ async def convert_url_to_pdf(urls, output_base_dir, wait_after_load: int = 10,
                 )
                 needs_login = needs_login or looks_like_login_page_for_url(url, title, body_text, current_url)
                 if needs_login:
+                    login_strategy = resolve_login_strategy(
+                        interactive_terminal=has_interactive_terminal(),
+                        headed_browser_available=True,
+                    )
+                    if login_strategy.confirmation_mode == "unavailable":
+                        raise RuntimeError(unsupported_login_flow_message(url))
+                    if login_strategy.confirmation_mode == "explicit_user_confirm":
+                        raise RuntimeError(explicit_auth_flow_message(url))
                     if session_exists:
                         print("Detected missing or expired site session — starting login bootstrap…")
                     else:
